@@ -11,6 +11,8 @@ volumes:
   loki_data:
   tempo_data:
   promtail_positions:
+  # The assistant's encrypted store of people's own AI keys (`assistant` profile).
+  assistant_data:
 
 networks:
   boom:
@@ -379,6 +381,17 @@ services:
       ASSISTANT_CONCURRENCY: ${ASSISTANT_CONCURRENCY:-}
       # Tool calls run against the API with each user's own token.
       BABAMUL_API_URL: http://api:${BOOM_API__PORT:-4000}/babamul
+      # Personal AI keys: people save an Anthropic or OpenRouter API key on their
+      # Profile and Ask Babamul answers them with it. Off while the secret is
+      # blank. Keys are stored encrypted with it in a SQLite file on the volume
+      # below, so run one replica, and losing the secret means everyone enters
+      # their key again.
+      ASSISTANT_KEYS_DB: /data/keys.sqlite3
+      ASSISTANT_KEYS_SECRET: ${ASSISTANT_KEYS_SECRET:-}
+    volumes:
+      # The image runs as `nobody`, so it must ship /data owned by nobody for
+      # Docker to give the new volume that owner.
+      - assistant_data:/data
     expose:
       - "8000"
     networks:
