@@ -397,7 +397,8 @@ function ProviderKey({
                 : "The assistant server can no longer read this key. Enter it again."}
             </p>
           )}
-          {saved.state === "ok" && (
+          {/* Picking a model also makes the key the choice, so it is offered only on the key in use. */}
+          {saved.state === "ok" && inUse && (
             <div className="flex flex-wrap items-center gap-2">
               <Label htmlFor={modelId}>Model</Label>
               <Select value={saved.model} onValueChange={onModel} disabled={busy}>
@@ -413,6 +414,12 @@ function ProviderKey({
                 </SelectContent>
               </Select>
             </div>
+          )}
+          {saved.state === "ok" && !inUse && (
+            <p className="text-sm">
+              Model <span className="font-mono">{saved.model}</span>. To change it, first choose "My {provider.name}{" "}
+              key" above so Ask Babamul answers with this key.
+            </p>
           )}
           <p className="text-xs text-muted-foreground">
             <span title={whenText(saved.expires_at)}>{expiresText(saved.expires_at)}</span>

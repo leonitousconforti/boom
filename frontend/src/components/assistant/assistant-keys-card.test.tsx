@@ -260,10 +260,10 @@ describe("AssistantKeysCard", () => {
     expect(calls(fetchMock, "POST", "/choice")).toEqual([{ use: "shared" }])
   })
 
-  it("changes the model of a saved key", async () => {
+  it("changes the model of the key in use", async () => {
     const fetchMock = stubAssistant({
       "GET /health": health(),
-      "GET /keys": () => json({ use: "shared", keys: [SAVED] }),
+      "GET /keys": () => json({ use: "anthropic", keys: [SAVED] }),
       "POST /choice": () => json({ use: "anthropic" }),
     })
     await renderCard()
@@ -274,9 +274,27 @@ describe("AssistantKeysCard", () => {
 
     await waitFor(() => expect(calls(fetchMock, "POST", "/choice")).toEqual([{ use: "anthropic", model: "claude-sonnet-5-5" }]))
     await waitFor(() =>
-      expect((screen.getByRole("radio", { name: "My Anthropic key" }) as HTMLInputElement).checked).toBe(true),
+      expect(within(section).getByRole("combobox", { name: "Model" }).textContent).toBe("claude-sonnet-5-5"),
     )
-    expect(within(section).getByRole("combobox", { name: "Model" }).textContent).toBe("claude-sonnet-5-5")
+    expect((screen.getByRole("radio", { name: "My Anthropic key" }) as HTMLInputElement).checked).toBe(true)
+    expect(toast.success).toHaveBeenCalledWith("Ask Babamul now answers with claude-sonnet-5-5.")
+  })
+
+  it("does not offer a model change on a saved key that is not in use", async () => {
+    const fetchMock = stubAssistant({
+      "GET /health": health(),
+      "GET /keys": () => json({ use: "shared", keys: [SAVED] }),
+      "POST /choice": () => json({ use: "anthropic" }),
+    })
+    await renderCard()
+    const section = await providerSection("Anthropic")
+
+    // Changing the model would also switch the person from the shared model to their paid key.
+    expect(within(section).queryByRole("combobox", { name: "Model" })).toBeNull()
+    expect(within(section).getByText("claude-haiku-5-5")).toBeTruthy()
+    expect(within(section).getByText(/first choose "My Anthropic key" above/)).toBeTruthy()
+    expect((screen.getByRole("radio", { name: "Shared Babamul model (default)" }) as HTMLInputElement).checked).toBe(true)
+    expect(calls(fetchMock, "POST", "/choice")).toHaveLength(0)
   })
 
   it("asks for a key the provider refused again, and keeps it the choice until then", async () => {
