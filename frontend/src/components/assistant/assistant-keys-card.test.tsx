@@ -222,6 +222,8 @@ describe("AssistantKeysCard", () => {
     expect(within(section).getByText(/Expires in 30 days/)).toBeTruthy()
     expect((screen.getByRole("radio", { name: "My Anthropic key" }) as HTMLInputElement).checked).toBe(true)
     expect(toast.success).toHaveBeenCalled()
+    // The form that had focus is gone; focus is on the provider's heading, not lost to the page.
+    expect(document.activeElement).toBe(within(section).getByRole("heading", { name: "Anthropic" }))
     expectKeyGone()
   })
 
@@ -245,6 +247,7 @@ describe("AssistantKeysCard", () => {
 
     expect((await within(section).findByRole("alert")).textContent).toBe(message)
     expect(input.value).toBe("")
+    expect(document.activeElement).toBe(input)
     expect(within(section).queryByText("…wxyz")).toBeNull()
     expect(toast.success).not.toHaveBeenCalled()
     expectKeyGone()
@@ -270,6 +273,57 @@ describe("AssistantKeysCard", () => {
     expect(within(section).getByLabelText("Anthropic API key")).toBeTruthy()
     expect((screen.getByRole("radio", { name: "Shared Babamul model (default)" }) as HTMLInputElement).checked).toBe(true)
     expect(screen.queryByRole("radio", { name: "My Anthropic key" })).toBeNull()
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(section).getByRole("heading", { name: "Anthropic" })),
+    )
+  })
+
+  it("sends focus back to the Remove button when removing is cancelled", async () => {
+    const fetchMock = stubAssistant({
+      "GET /health": health(),
+      "GET /keys": () => json({ use: "anthropic", keys: [SAVED] }),
+    })
+    await renderCard()
+    const section = await providerSection("Anthropic")
+    const button = within(section).getByRole("button", { name: "Remove your Anthropic key" })
+
+    button.focus()
+    fireEvent.click(button)
+    const dialog = await screen.findByRole("dialog", { name: "Remove your Anthropic key?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(button))
+    expect(calls(fetchMock, "DELETE", "/keys/anthropic")).toHaveLength(0)
+  })
+
+  it("keeps the choices usable and focused while a change is sent, and drops extra picks", async () => {
+    let answer: (response: Response) => void = () => {}
+    const fetchMock = stubAssistant({
+      "GET /health": health(),
+      "GET /keys": () => json({ use: "anthropic", keys: [SAVED] }),
+      "POST /choice": () => new Promise<Response>((resolve) => (answer = resolve)),
+    })
+    await renderCard()
+    const shared = (await screen.findByRole("radio", { name: "Shared Babamul model (default)" })) as HTMLInputElement
+    const mine = screen.getByRole("radio", { name: "My Anthropic key" }) as HTMLInputElement
+    const group = screen.getByRole("group", { name: "Which model answers your questions" }) as HTMLFieldSetElement
+
+    shared.focus()
+    fireEvent.click(shared)
+    await settle()
+    // A disabled fieldset would blur the radio that has focus.
+    expect(group.disabled).toBe(false)
+    expect(group.getAttribute("aria-busy")).toBe("true")
+    fireEvent.click(mine)
+    await settle()
+    expect(calls(fetchMock, "POST", "/choice")).toEqual([{ use: "shared" }])
+
+    await act(async () => answer(json({ use: "shared" })))
+    await waitFor(() => expect(shared.checked).toBe(true))
+    expect(mine.checked).toBe(false)
+    expect(group.getAttribute("aria-busy")).toBeNull()
+    expect(document.activeElement).toBe(shared)
   })
 
   it("switches between the shared model and a saved key", async () => {

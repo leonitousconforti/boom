@@ -35,6 +35,12 @@ import { cn } from "@/lib/utils"
 const SHARED = "shared"
 const DAY_MS = 86_400_000
 
+// Each provider's heading, where focus goes once the controls that had it are gone.
+const headingId = (provider: string) => `${KEYS_CARD_ID}-${provider}`
+const focusHeading = (provider: string) => document.getElementById(headingId(provider))?.focus()
+// The button that opens the remove dialog, which has no Radix trigger to send focus back to.
+const removeId = (provider: string) => `${headingId(provider)}-remove`
+
 // How to cap spending, for the providers that have a way.
 const SPEND_LIMITS: Record<string, string> = {
   anthropic: "on Anthropic, a key in a workspace with a spend limit",
@@ -105,6 +111,8 @@ export function AssistantKeysCard({ className }: { className?: string }) {
     })
 
   async function choose(use: string, model?: string) {
+    // The choices stay enabled while a request runs, so the one with focus keeps it; this drops extra picks.
+    if (busy) return
     const target = model ? use : SHARED
     setBusy(target)
     setError(target, null)
@@ -134,6 +142,8 @@ export function AssistantKeysCard({ className }: { className?: string }) {
           },
       )
       toast.success(`${provider.name} accepted your key. Ask Babamul answers with it now.`)
+      // The form that had focus goes away now that the key is saved.
+      focusHeading(provider.id)
       return true
     } catch (err) {
       setError(provider.id, messageOf(err))
@@ -161,6 +171,8 @@ export function AssistantKeysCard({ className }: { className?: string }) {
       setError(provider.id, messageOf(err))
     } finally {
       setBusy(null)
+      // The dialog closed without sending focus back to the Remove button, which is gone or was disabled.
+      focusHeading(provider.id)
     }
   }
 
@@ -220,7 +232,7 @@ export function AssistantKeysCard({ className }: { className?: string }) {
           </p>
         ) : (
           <>
-            <fieldset className="space-y-2" disabled={busy !== null}>
+            <fieldset className="space-y-2" aria-busy={busy === SHARED || undefined}>
               <legend className="mb-2 text-sm font-medium">Which model answers your questions</legend>
               <Choice
                 name={choiceName}
@@ -270,7 +282,13 @@ export function AssistantKeysCard({ className }: { className?: string }) {
       </CardContent>
 
       <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
-        <DialogContent>
+        <DialogContent
+          onCloseAutoFocus={(e) => {
+            e.preventDefault()
+            // Closed by Remove, remove() moves focus once it is done. Otherwise back to the Remove button.
+            if (busy === null && removeTarget) document.getElementById(removeId(removeTarget.id))?.focus()
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Remove your {removeTarget?.name} key?</DialogTitle>
             <DialogDescription>
@@ -347,15 +365,14 @@ function ProviderKey({
   onModel: (model: string) => void
   onRemove: () => void
 }) {
-  const titleId = useId()
   const modelId = useId()
   // A model the operator has since dropped still shows as what the key uses.
   const models = saved && saved.model && !provider.models.includes(saved.model) ? [...provider.models, saved.model] : provider.models
 
   return (
-    <section aria-labelledby={titleId} className="space-y-4 rounded-lg border p-4">
+    <section aria-labelledby={headingId(provider.id)} className="space-y-4 rounded-lg border p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id={titleId} className="font-semibold">
+        <h3 id={headingId(provider.id)} tabIndex={-1} className="font-semibold outline-none">
           {provider.name}
         </h3>
         {provider.key_url && (
@@ -382,6 +399,7 @@ function ProviderKey({
               <Badge variant="destructive">{saved.state === "refused" ? "Refused" : "Unreadable"}</Badge>
             )}
             <Button
+              id={removeId(provider.id)}
               variant="ghost"
               size="sm"
               className="ml-auto text-destructive"
@@ -404,7 +422,7 @@ function ProviderKey({
           {saved.state === "ok" && inUse && (
             <div className="flex flex-wrap items-center gap-2">
               <Label htmlFor={modelId}>Model</Label>
-              <Select value={saved.model} onValueChange={onModel} disabled={busy}>
+              <Select value={saved.model} onValueChange={onModel}>
                 <SelectTrigger id={modelId} size="sm">
                   <SelectValue />
                 </SelectTrigger>
@@ -477,8 +495,12 @@ function KeyForm({
     if (busy) return
     const input = keyRef.current
     const key = input?.value.trim() ?? ""
-    // Emptied before the check starts, so the key is not left on screen whatever the answer.
-    if (input) input.value = ""
+    // Emptied before the check starts, so the key is not left on screen whatever the answer. Focus stays
+    // in the box, since the button that had it is disabled until something is pasted again.
+    if (input) {
+      input.value = ""
+      input.focus()
+    }
     setFilled(false)
     if (!key) return
     const saved = await onSave({
