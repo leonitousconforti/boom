@@ -48,22 +48,28 @@ export function assistantBase(): string {
   return (configured || "/api/assistant").replace(/\/+$/, "");
 }
 
-/** Resolves to null when the assistant is not deployed or not healthy; never throws. */
-export async function checkAssistant(signal?: AbortSignal): Promise<AssistantHealth | null> {
+/** The body of `/health`, or null when the assistant is not deployed or not healthy; never throws. */
+export async function fetchHealth(signal?: AbortSignal): Promise<Record<string, unknown> | null> {
   try {
     const res = await fetch(`${assistantBase()}/health`, { signal });
     // A SPA fallback answers unknown paths with index.html and a 200, so the
     // body has to say it is the assistant.
     if (!res.ok) return null;
     const body: unknown = await res.json();
-    if (!isObject(body) || body.status !== "ok") return null;
-    return {
-      model: typeof body.model === "string" ? body.model : "",
-      vision: body.vision === true,
-    };
+    return isObject(body) && body.status === "ok" ? body : null;
   } catch {
     return null;
   }
+}
+
+/** Resolves to null when the assistant is not deployed or not healthy; never throws. */
+export async function checkAssistant(signal?: AbortSignal): Promise<AssistantHealth | null> {
+  const body = await fetchHealth(signal);
+  if (!body) return null;
+  return {
+    model: typeof body.model === "string" ? body.model : "",
+    vision: body.vision === true,
+  };
 }
 
 export type AssistantErrorKind =
