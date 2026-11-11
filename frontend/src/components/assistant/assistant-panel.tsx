@@ -13,7 +13,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
-import type { AssistantTurn, ChatContext } from "@/lib/assistant"
+import type { AssistantTurn, ChatContext, Usage } from "@/lib/assistant"
+import { KEYS_CARD_ID } from "@/lib/assistant-keys"
 import { cn } from "@/lib/utils"
 import { AnswerText, MarkdownRetry } from "./markdown-text"
 import { useAssistantStore } from "./store"
@@ -30,6 +31,12 @@ const OBJECT_EXAMPLES = [
   "Show me its light curve and cutouts",
   "Find objects that look like this one",
 ]
+
+// Where "Fix on Profile" goes: the Profile card for the person's own AI keys.
+const OWN_KEYS_PATH = `/profile#${KEYS_CARD_ID}`
+
+// These pass on their own, so the same key may answer if asked again a little later.
+const PASSING_CODES = new Set(["own_key_busy", "own_provider_down"])
 
 // Within this many pixels of the end, new text keeps the view scrolled down.
 const STICK_PX = 48
@@ -56,6 +63,7 @@ export function AssistantPanel({ onNavigate }: { onNavigate: () => void }) {
   const stop = useAssistantStore((s) => s.stop)
   const reset = useAssistantStore((s) => s.reset)
   const retry = useAssistantStore((s) => s.retry)
+  const retryShared = useAssistantStore((s) => s.retryShared)
 
   const [draft, setDraft] = useState("")
   const contentRef = useRef<HTMLDivElement>(null)
@@ -225,6 +233,7 @@ export function AssistantPanel({ onNavigate }: { onNavigate: () => void }) {
                     isLast={i === turns.length - 1}
                     canRetry={i === turns.length - 1 && !running}
                     onRetry={retry}
+                    onRetryShared={retryShared}
                     onNavigate={onNavigate}
                     from={location}
                   />
@@ -284,12 +293,18 @@ function activity(turn: AssistantTurn, status: string | null): string {
   return "Thinking"
 }
 
+function usageText(usage: Usage): string {
+  const n = (count: number) => count.toLocaleString()
+  return `${n(usage.input_tokens)} tokens in, ${n(usage.output_tokens)} out`
+}
+
 function Answer({
   turn,
   status,
   isLast,
   canRetry,
   onRetry,
+  onRetryShared,
   onNavigate,
   from,
 }: {
@@ -298,6 +313,7 @@ function Answer({
   isLast: boolean
   canRetry: boolean
   onRetry: () => void
+  onRetryShared: () => void
   onNavigate: () => void
   from: ReturnType<typeof useLocation>
 }) {
@@ -316,6 +332,9 @@ function Answer({
           ),
         )}
       </div>
+      {turn.state === "done" && turn.usage && (
+        <p className="text-xs text-muted-foreground">{usageText(turn.usage)}</p>
+      )}
       {/* Kept under the latest answer once it is done, so the end of the list does not jump.
           Outside the busy region so a queue position is read out while the answer waits. */}
       {(running || stopped || isLast) && (
@@ -346,6 +365,25 @@ function Answer({
                 Log in
               </Link>
             </Button>
+          ) : turn.error.kind === "own_key" ? (
+            // Their key, their call: fix it, or ask once with the shared model. Never switched silently.
+            <span className="flex flex-wrap gap-2">
+              <Button asChild size="sm" variant="outline" className="text-foreground">
+                <Link to={OWN_KEYS_PATH} onClick={onNavigate}>
+                  Fix on Profile
+                </Link>
+              </Button>
+              {canRetry && (
+                <Button size="sm" variant="outline" className="text-foreground" onClick={onRetryShared}>
+                  Ask the shared model
+                </Button>
+              )}
+              {canRetry && PASSING_CODES.has(turn.error.code ?? "") && (
+                <Button size="sm" variant="outline" className="text-foreground" onClick={onRetry}>
+                  Try again
+                </Button>
+              )}
+            </span>
           ) : (
             canRetry && (
               <Button size="sm" variant="outline" className="text-foreground" onClick={onRetry}>

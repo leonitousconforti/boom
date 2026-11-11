@@ -390,6 +390,68 @@ describe("AssistantButton", () => {
     expect(live[0].textContent).toContain("a2")
   })
 
+  it("offers the Profile or the shared model when the person's own key is refused", async () => {
+    let asked = 0
+    const fetchMock = stubAssistant(() =>
+      asked++ === 0
+        ? new Response(
+            JSON.stringify({ error: "Anthropic did not accept your key. Check it on your Profile.", code: "own_key_refused" }),
+            { status: 422 },
+          )
+        : streamOf(sse({ type: "done", content: "Shared answer." })),
+    )
+    const panel = await openPanel()
+    await ask(panel, "hello")
+
+    const alert = await within(panel).findByRole("alert")
+    expect(alert.textContent).toContain("Anthropic did not accept your key. Check it on your Profile.")
+    expect(within(alert).getByRole("link", { name: "Fix on Profile" }).getAttribute("href")).toBe("/profile#ai-model")
+    expect(within(alert).queryByRole("link", { name: "Log in" })).toBeNull()
+    // Asking again on the same refused key would only fail again.
+    expect(within(alert).queryByRole("button", { name: "Try again" })).toBeNull()
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Ask the shared model" }))
+
+    await within(panel).findByText("Shared answer.")
+    const chats = fetchMock.mock.calls.filter(([u]) => u.endsWith("/chat")) as unknown as [string, RequestInit][]
+    expect(chats.map(([, init]) => JSON.parse(String(init.body)))).toEqual([
+      { messages: [{ role: "user", content: "hello" }], context: { path: "/query" } },
+      { messages: [{ role: "user", content: "hello" }], context: { path: "/query" }, use: "shared" },
+    ])
+    expect(within(panel).getAllByText("hello")).toHaveLength(1)
+    expect(within(panel).queryByRole("alert")).toBeNull()
+  })
+
+  it("offers the same when the own key fails mid-answer, and a retry when the provider is only busy", async () => {
+    const { streams } = stubLiveAssistant()
+    const panel = await openPanel()
+    await ask(panel, "hello")
+    await waitFor(() => expect(streams).toHaveLength(1))
+    await streams[0].send({ type: "status", message: "Answering with your Anthropic key …ab12 (claude-haiku-5-5)" })
+    expect(within(panel).getByRole("status").textContent).toBe("Answering with your Anthropic key …ab12 (claude-haiku-5-5)")
+
+    await streams[0].send({ type: "error", message: "Anthropic is busy. Try again in a minute.", code: "own_key_busy" })
+
+    const alert = await within(panel).findByRole("alert")
+    expect(alert.textContent).toContain("Anthropic is busy. Try again in a minute.")
+    expect(within(alert).getByRole("link", { name: "Fix on Profile" })).toBeTruthy()
+    expect(within(alert).getByRole("button", { name: "Ask the shared model" })).toBeTruthy()
+    expect(within(alert).getByRole("button", { name: "Try again" })).toBeTruthy()
+  })
+
+  it("shows what an answer on the person's own key used", async () => {
+    stubAssistant(() =>
+      streamOf(sse({ type: "done", content: "Done.", usage: { input_tokens: 12345, output_tokens: 678 } })),
+    )
+    const panel = await openPanel()
+    await ask(panel, "hello")
+
+    await within(panel).findByText("Done.")
+    expect(
+      within(panel).getByText(`${(12345).toLocaleString()} tokens in, ${(678).toLocaleString()} out`),
+    ).toBeTruthy()
+  })
+
   it("lets Enter start a new line on a touch screen", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(pointer: coarse)" }))
     const fetchMock = stubAssistant(() => streamOf(sse({ type: "done", content: "Hi." })))

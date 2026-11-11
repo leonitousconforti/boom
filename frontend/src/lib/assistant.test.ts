@@ -195,6 +195,21 @@ describe("streamChat", () => {
     [502, null, "unavailable", "The assistant is unavailable right now. Try again later."],
     [500, { error: "  " }, "unavailable", "The assistant is unavailable right now. Try again later."],
     [400, { error: "messages must end with a user message" }, "bad_request", "messages must end with a user message"],
+    [
+      422,
+      { error: "Anthropic did not accept your key. Check it on your Profile.", code: "own_key_refused" },
+      "own_key",
+      "Anthropic did not accept your key. Check it on your Profile.",
+    ],
+    [
+      503,
+      { error: "OpenRouter is not answering right now.", code: "own_provider_down" },
+      "own_key",
+      "OpenRouter is not answering right now.",
+    ],
+    // A provider refusing the person's key must never read as a Babamul logout.
+    [401, { error: "Your key was refused.", code: "own_key_refused" }, "own_key", "Your key was refused."],
+    [422, { code: "own_model_unavailable" }, "own_key", "Your own AI key could not answer this question."],
   ])("maps HTTP %i to %s", async (status, body, kind, message) => {
     stubFetch(
       new Response(body ? JSON.stringify(body) : "<html>Bad gateway</html>", {
@@ -207,6 +222,37 @@ describe("streamChat", () => {
     expect(err).toBeInstanceOf(AssistantError)
     expect(err).toMatchObject({ kind, message, status })
     expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it("keeps the service's code on the error", async () => {
+    stubFetch(new Response(JSON.stringify({ error: "Out of credit.", code: "own_key_no_credit" }), { status: 422 }))
+    await expect(streamChat({ messages: [] }, "tok", () => {})).rejects.toMatchObject({
+      kind: "own_key",
+      code: "own_key_no_credit",
+    })
+  })
+
+  it("asks one question with the shared model", async () => {
+    const fetchMock = stubFetch(streamResponse([sse({ type: "done", content: "ok" })]))
+    await streamChat({ messages: [{ role: "user", content: "hi" }], use: "shared" }, "tok", () => {})
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ messages: [{ role: "user", content: "hi" }], use: "shared" })
+  })
+
+  it("reads usage on done and the code on an error event", async () => {
+    const events = await collect([
+      sse(
+        { type: "done", content: "ok", usage: { input_tokens: 1200, output_tokens: 80 } },
+        { type: "error", message: "Out of credit.", code: "own_key_no_credit" },
+      ),
+    ])
+    expect(events).toEqual([
+      { type: "done", content: "ok", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "error", message: "Out of credit.", code: "own_key_no_credit" },
+    ])
+    // Usage that is not two counts is left out.
+    const [bad] = await collect([sse({ type: "done", content: "ok", usage: { input_tokens: "lots" } })])
+    expect(bad).toEqual({ type: "done", content: "ok" })
   })
 
   it("maps a network failure to unavailable", async () => {
@@ -329,6 +375,19 @@ describe("applyEvent", () => {
     expect(turn.state).toBe("error")
     expect(turn.error?.message).toBe("Model timed out.")
     expect(turn.parts.map((p) => p.kind === "tool" && p.step.state)).toEqual(["failed", "failed"])
+  })
+
+  it("tells an error about the person's own key apart, and keeps usage", () => {
+    expect(answer({ type: "error", message: "Out of credit.", code: "own_key_no_credit" }).error).toEqual({
+      kind: "own_key",
+      message: "Out of credit.",
+      code: "own_key_no_credit",
+    })
+    expect(answer({ type: "error", message: "Model timed out.", code: "stalled" }).error?.kind).toBe("interrupted")
+    expect(answer({ type: "done", content: "ok", usage: { input_tokens: 5, output_tokens: 2 } }).usage).toEqual({
+      input_tokens: 5,
+      output_tokens: 2,
+    })
   })
 })
 

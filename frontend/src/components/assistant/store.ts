@@ -29,8 +29,11 @@ type AssistantState = {
   /** The server's latest `status` message, cleared once the answer moves on. */
   status: string | null
   setUser: (user: string | null) => void
-  ask: (question: string, context?: ChatContext) => void
+  /** `use: "shared"` asks with the shared model even if the person chose their own key. */
+  ask: (question: string, context?: ChatContext, use?: "shared") => void
   retry: () => void
+  /** Asks the last question again with the shared model, after their own key failed. */
+  retryShared: () => void
   stop: () => void
   reset: () => void
 }
@@ -89,6 +92,14 @@ function cancelCurrent() {
   current = null
 }
 
+/** The last question, when its answer failed and nothing is running, so it can be asked again. */
+function failedQuestion(turns: Turn[], running: boolean): UserTurn | null {
+  const answer = turns[turns.length - 1]
+  const question = turns[turns.length - 2]
+  if (running || answer?.role !== "assistant" || answer.state !== "error" || question?.role !== "user") return null
+  return question
+}
+
 export const useAssistantStore = create<AssistantState>()((set, get) => ({
   user: null,
   turns: [],
@@ -107,7 +118,7 @@ export const useAssistantStore = create<AssistantState>()((set, get) => ({
     set({ user, turns: load(user), running: false, status: null })
   },
 
-  ask: (question, context) => {
+  ask: (question, context, use) => {
     const content = question.trim()
     const { turns, running, user } = get()
     if (!content || running) return
@@ -147,7 +158,7 @@ export const useAssistantStore = create<AssistantState>()((set, get) => ({
     }
 
     streamChat(
-      { messages, context },
+      use ? { messages, context, use } : { messages, context },
       token.access_token,
       (event) => {
         if (event.type === "text") {
@@ -170,7 +181,7 @@ export const useAssistantStore = create<AssistantState>()((set, get) => ({
         update((t) =>
           error.kind === "aborted"
             ? { ...finishTools(t), state: "stopped" }
-            : { ...finishTools(t), state: "error", error: { kind: error.kind, message: error.message } },
+            : { ...finishTools(t), state: "error", error: { kind: error.kind, message: error.message, code: error.code } },
         )
       })
       .finally(() => {
@@ -186,11 +197,18 @@ export const useAssistantStore = create<AssistantState>()((set, get) => ({
 
   retry: () => {
     const { turns, running, ask } = get()
-    const answer = turns[turns.length - 1]
-    const question = turns[turns.length - 2]
-    if (running || answer?.role !== "assistant" || answer.state !== "error" || question?.role !== "user") return
+    const question = failedQuestion(turns, running)
+    if (!question) return
     set({ turns: turns.slice(0, -2) })
     ask(question.content, question.context)
+  },
+
+  retryShared: () => {
+    const { turns, running, ask } = get()
+    const question = failedQuestion(turns, running)
+    if (!question) return
+    set({ turns: turns.slice(0, -2) })
+    ask(question.content, question.context, "shared")
   },
 
   stop: () => {
