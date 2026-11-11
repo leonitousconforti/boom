@@ -1,5 +1,7 @@
+import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { Link, MemoryRouter } from "react-router-dom"
 import { toast } from "sonner"
 import { AssistantKeysCard } from "@/components/assistant/assistant-keys-card"
 import { TOKEN_KEY } from "@/lib/api"
@@ -76,8 +78,14 @@ async function settle() {
   })
 }
 
-async function renderCard() {
-  const view = render(<AssistantKeysCard />)
+/** Renders the card on Profile at `path`, under a router as Profile.tsx has it, with anything else in `extra`. */
+async function renderCard(path = "/profile", extra?: ReactNode) {
+  const view = render(
+    <MemoryRouter initialEntries={[path]}>
+      <AssistantKeysCard />
+      {extra}
+    </MemoryRouter>,
+  )
   await settle()
   return view
 }
@@ -152,6 +160,28 @@ describe("AssistantKeysCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }))
     expect(await screen.findByRole("textbox", { name: "Workspace ID (optional)" })).toBeTruthy()
     expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("scrolls to itself when Profile opens at its link", async () => {
+    stubAssistant({ "GET /health": health(), "GET /keys": () => json({ use: "shared", keys: [] }) })
+    await renderCard("/profile#ai-model")
+
+    const card = await screen.findByText("AI model for Ask Babamul")
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts).toEqual([card.closest("#ai-model")])
+  })
+
+  it("scrolls to itself each time its link is followed on Profile", async () => {
+    stubAssistant({ "GET /health": health(), "GET /keys": () => json({ use: "shared", keys: [] }) })
+    // Like the Ask panel's "Fix on Profile", with the panel open over Profile.
+    await renderCard("/profile", <Link to="/profile#ai-model">Fix on Profile</Link>)
+    const card = (await screen.findByText("AI model for Ask Babamul")).closest("#ai-model")
+    const scroll = vi.mocked(Element.prototype.scrollIntoView)
+    expect(scroll).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("link", { name: "Fix on Profile" }))
+    await waitFor(() => expect(scroll.mock.contexts).toEqual([card]))
+    fireEvent.click(screen.getByRole("link", { name: "Fix on Profile" }))
+    await waitFor(() => expect(scroll.mock.contexts).toEqual([card, card]))
   })
 
   it("saves and checks a key, then keeps it nowhere on the page", async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react"
+import { useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import { ExternalLink, Loader2, Trash } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -63,6 +64,7 @@ export function AssistantKeysCard({ className }: { className?: string }) {
   const [removeOpen, setRemoveOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const choiceName = useId()
+  const { hash, key: visit } = useLocation()
 
   useEffect(() => {
     const controller = new AbortController()
@@ -87,9 +89,10 @@ export function AssistantKeysCard({ className }: { className?: string }) {
 
   const ready = !!overview || !!loadError
   useEffect(() => {
-    // The Ask panel's "Fix on Profile" links here; the page loads before this card does.
-    if (ready && window.location.hash === `#${KEYS_CARD_ID}`) rootRef.current?.scrollIntoView?.({ block: "start" })
-  }, [ready])
+    // The Ask panel's "Fix on Profile" links here. The page loads before this card does, and the panel
+    // can be open on Profile already, where following the link again is a new visit but no new mount.
+    if (ready && hash === `#${KEYS_CARD_ID}`) rootRef.current?.scrollIntoView?.({ block: "start" })
+  }, [ready, hash, visit])
 
   if (!config || turnedOff) return null
 
