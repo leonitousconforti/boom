@@ -13,6 +13,7 @@ import { Check, Copy, Key, Pencil, Plus, Trash, X } from "lucide-react";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { Spinner } from "@/components/ui/spinner.tsx";
 import * as analytics from "@/lib/analytics";
+import { AssistantKeysCard } from "@/components/assistant/assistant-keys-card";
 
 export default function Profile() {
   const [profile, setProfile] = useState<ProfileType>(null);
@@ -505,6 +506,9 @@ export default function Profile() {
           )}
         </CardContent>
       </Card>
+
+      {/* Loads on its own and shows nothing unless the assistant offers personal keys */}
+      <AssistantKeysCard className="mt-6" />
 
       {/* Create Credential Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>

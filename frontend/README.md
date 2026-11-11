@@ -35,6 +35,24 @@ answers. In dev, the Vite server proxies `/api/assistant` to `VITE_ASSISTANT_PRO
 to the compose command and set `ASSISTANT_LLM_URL` in `.env`. In production, nginx proxies it to
 the `assistant` service.
 
+### Personal AI keys
+
+When the assistant has personal keys turned on, a card on the Profile page ("AI model for Ask
+Babamul") lets people save their own Anthropic or OpenRouter API key and choose whether the
+shared model or their key answers. The card shows only when `/api/assistant/health` returns
+`own_keys`, and it talks only to the assistant (`/api/assistant/keys`, `/api/assistant/choice`)
+with the web login token. A key is sent once, when it is saved; the assistant checks it with the
+provider and stores it encrypted, and no route returns it. When a question on someone's own key
+fails, the Ask panel links to the card and offers to ask the shared model instead.
+
+To turn it on with compose, set `ASSISTANT_KEYS_SECRET` (32 random bytes in base64, e.g.
+`openssl rand -base64 32`) in `.env` or, for the deploy workflow, as a repository secret. Keys
+are kept in the `assistant_data` volume, mounted at `/data`; the boom-mcp image runs as `nobody`,
+so it needs a `/data` directory owned by `nobody` for the volume to be writable. Keep one
+replica of the assistant, and keep the secret: without it, saved keys cannot be read and
+everyone enters theirs again. The providers and models on offer are set on the assistant (see
+the boom-mcp README).
+
 ## ESLint configuration
 
 This project uses [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react)

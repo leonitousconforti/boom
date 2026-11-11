@@ -19,9 +19,14 @@ export type ChatContext = {
 export type ChatRequest = {
   messages: ChatMessage[];
   context?: ChatContext;
+  /** "shared" answers this one question with the shared model, whatever the person chose on their Profile. */
+  use?: "shared";
 };
 
 export type ToolImage = { mime_type: string; data: string };
+
+/** What a question cost, sent when it was answered with the person's own key. */
+export type Usage = { input_tokens: number; output_tokens: number };
 
 export type AssistantEvent =
   | { type: "status"; message: string }
@@ -35,8 +40,8 @@ export type AssistantEvent =
       summary: string;
       images: ToolImage[];
     }
-  | { type: "done"; content: string }
-  | { type: "error"; message: string };
+  | { type: "done"; content: string; usage?: Usage }
+  | { type: "error"; message: string; code?: string };
 
 export type AssistantHealth = { model: string; vision: boolean };
 
@@ -48,22 +53,28 @@ export function assistantBase(): string {
   return (configured || "/api/assistant").replace(/\/+$/, "");
 }
 
-/** Resolves to null when the assistant is not deployed or not healthy; never throws. */
-export async function checkAssistant(signal?: AbortSignal): Promise<AssistantHealth | null> {
+/** The body of `/health`, or null when the assistant is not deployed or not healthy; never throws. */
+export async function fetchHealth(signal?: AbortSignal): Promise<Record<string, unknown> | null> {
   try {
     const res = await fetch(`${assistantBase()}/health`, { signal });
     // A SPA fallback answers unknown paths with index.html and a 200, so the
     // body has to say it is the assistant.
     if (!res.ok) return null;
     const body: unknown = await res.json();
-    if (!isObject(body) || body.status !== "ok") return null;
-    return {
-      model: typeof body.model === "string" ? body.model : "",
-      vision: body.vision === true,
-    };
+    return isObject(body) && body.status === "ok" ? body : null;
   } catch {
     return null;
   }
+}
+
+/** Resolves to null when the assistant is not deployed or not healthy; never throws. */
+export async function checkAssistant(signal?: AbortSignal): Promise<AssistantHealth | null> {
+  const body = await fetchHealth(signal);
+  if (!body) return null;
+  return {
+    model: typeof body.model === "string" ? body.model : "",
+    vision: body.vision === true,
+  };
 }
 
 export type AssistantErrorKind =
@@ -72,7 +83,8 @@ export type AssistantErrorKind =
   | "unavailable"
   | "bad_request"
   | "interrupted"
-  | "aborted";
+  | "aborted"
+  | "own_key";
 
 const DEFAULT_MESSAGES: Record<AssistantErrorKind, string> = {
   auth: "Your session has expired. Log in again.",
@@ -81,22 +93,38 @@ const DEFAULT_MESSAGES: Record<AssistantErrorKind, string> = {
   bad_request: "The assistant could not read that request.",
   interrupted: "The answer was cut off. Try again.",
   aborted: "Stopped.",
+  own_key: "Your own AI key could not answer this question.",
 };
+
+/**
+ * Whether an error `code` is about the person's own AI key or its provider
+ * (own_key_missing, own_key_refused, own_key_no_credit, own_key_busy,
+ * own_model_unavailable, own_provider_down). Those are theirs to fix on their
+ * Profile, or to get around by asking the shared model.
+ */
+export function isOwnKeyCode(code: string | undefined): boolean {
+  return !!code && (code.startsWith("own_key_") || code === "own_model_unavailable" || code === "own_provider_down");
+}
 
 export class AssistantError extends Error {
   readonly kind: AssistantErrorKind;
   readonly status?: number;
+  /** The service's own name for what went wrong, when it gave one. */
+  readonly code?: string;
 
-  constructor(kind: AssistantErrorKind, message?: string, status?: number) {
+  constructor(kind: AssistantErrorKind, message?: string, status?: number, code?: string) {
     super(message || DEFAULT_MESSAGES[kind]);
     this.name = "AssistantError";
     this.kind = kind;
     this.status = status;
+    this.code = code;
   }
 }
 
 /** Maps a response that failed before streaming to what the panel shows. */
-export function errorForStatus(status: number, serverMessage?: string): AssistantError {
+export function errorForStatus(status: number, serverMessage?: string, code?: string): AssistantError {
+  // Checked first: a provider refusing the person's key is not a Babamul logout.
+  if (isOwnKeyCode(code)) return new AssistantError("own_key", serverMessage, status, code);
   if (status === 401) return new AssistantError("auth", undefined, status);
   // The server tells "already running" apart from "too many", so its words win.
   if (status === 429) return new AssistantError("busy", serverMessage, status);
@@ -193,9 +221,9 @@ export function parseAssistantEvent(data: string): AssistantEvent | null {
         images: Array.isArray(body.images) ? body.images.filter(isToolImage) : [],
       };
     case "done":
-      return { type: "done", content: str(body.content) };
+      return { type: "done", content: str(body.content), usage: parseUsage(body.usage) };
     case "error":
-      return { type: "error", message: str(body.message) || DEFAULT_MESSAGES.interrupted };
+      return { type: "error", message: str(body.message) || DEFAULT_MESSAGES.interrupted, code: str(body.code) || undefined };
     default:
       return null;
   }
@@ -233,7 +261,8 @@ export async function streamChat(
   }
 
   if (!res.ok) {
-    throw errorForStatus(res.status, await readErrorMessage(res));
+    const { message, code } = await readErrorBody(res);
+    throw errorForStatus(res.status, message, code);
   }
   if (!res.body) throw new AssistantError("unavailable");
 
@@ -270,14 +299,30 @@ export async function streamChat(
   throw new AssistantError(signal?.aborted ? "aborted" : "interrupted");
 }
 
-async function readErrorMessage(res: Response): Promise<string | undefined> {
+async function readErrorBody(res: Response): Promise<{ message?: string; code?: string }> {
   try {
     const body: unknown = JSON.parse(await res.text());
-    if (isObject(body) && typeof body.error === "string" && body.error.trim()) return body.error;
+    if (isObject(body)) {
+      return {
+        message: typeof body.error === "string" && body.error.trim() ? body.error : undefined,
+        code: typeof body.code === "string" && body.code ? body.code : undefined,
+      };
+    }
   } catch {
     // Not JSON: a proxy's error page.
   }
-  return undefined;
+  return {};
+}
+
+function parseUsage(v: unknown): Usage | undefined {
+  if (!isObject(v)) return undefined;
+  const { input_tokens, output_tokens } = v;
+  if (!isCount(input_tokens) || !isCount(output_tokens)) return undefined;
+  return { input_tokens, output_tokens };
+}
+
+function isCount(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0;
 }
 
 function transportError(
@@ -335,7 +380,9 @@ export type AssistantTurn = {
   /** The final answer, from `done`; what is sent back as history. */
   content: string;
   state: "running" | "done" | "stopped" | "error";
-  error?: { kind: AssistantErrorKind; message: string };
+  error?: { kind: AssistantErrorKind; message: string; code?: string };
+  /** Tokens the answer took, when the service says; sent for answers on the person's own key. */
+  usage?: Usage;
 };
 
 export type Turn = UserTurn | AssistantTurn;
@@ -404,10 +451,12 @@ export function applyEvent(turn: AssistantTurn, event: AssistantEvent): Assistan
         if (parts[parts.length - 1]?.kind === "text") parts.pop();
         parts.push({ kind: "text", text: event.content });
       }
-      return { ...turn, parts, content: event.content, state: "done" };
+      return { ...turn, parts, content: event.content, state: "done", usage: event.usage };
     }
-    case "error":
-      return { ...finishTools(turn), state: "error", error: { kind: "interrupted", message: event.message } };
+    case "error": {
+      const kind = isOwnKeyCode(event.code) ? "own_key" : "interrupted";
+      return { ...finishTools(turn), state: "error", error: { kind, message: event.message, code: event.code } };
+    }
   }
 }
 
