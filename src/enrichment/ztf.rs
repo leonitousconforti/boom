@@ -24,6 +24,7 @@ use crate::utils::lightcurves::{
 };
 use crate::utils::linking::{angular_separation_deg, night_at};
 use crate::utils::mpcorb::{elements_from_document, normalize_ztf_ssnamenr, ORBITS_COLLECTION};
+use crate::utils::o11y::logging::log_error;
 use crate::utils::outburst::{median, Point, MAX_SEPARATION_ARCSEC};
 use crate::utils::phase_curve::{curves_from_document, PhaseCurve, BASELINES_COLLECTION};
 use crate::utils::sso_geometry::{geometry_at, OrbitalElements, ZTF};
@@ -1225,8 +1226,12 @@ impl EnrichmentWorker for ZtfEnrichmentWorker {
             }
         }
 
+        // Babamul is a side output: its failure must not keep the batch from
+        // reaching the filter queue.
         if let Some(babamul) = self.babamul.as_ref() {
-            babamul.process_ztf_alerts(enriched_alerts).await?;
+            if let Err(error) = babamul.process_ztf_alerts(enriched_alerts).await {
+                log_error!(error, "failed to publish enriched ZTF alerts to Babamul");
+            }
         }
 
         Ok(processed_alerts)
