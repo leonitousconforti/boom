@@ -4,6 +4,7 @@ mod lsst;
 mod winter;
 mod ztf;
 
+pub(crate) use base::push_to_queue;
 pub use base::{
     consumer, count_messages, delete_topic, initialize_topic, subscription_window, AlertConsumer,
     AlertProducer, StartDate, StartPlan,
