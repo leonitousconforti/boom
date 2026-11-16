@@ -203,6 +203,24 @@ async fn flush_batch(
     Ok(result.modified_count as u64)
 }
 
+/// Stop a shard between documents. Each repaired document is independently
+/// correct, so this leaves a state that is easy to describe: some documents
+/// repaired, the rest untouched.
+fn canceled(ctx: &TaskContext, dry_run: bool, scanned: u64, modified: u64) -> super::TaskError {
+    if dry_run {
+        ctx.warn(format!(
+            "dry run canceled after scanning {scanned} document(s) in this shard"
+        ));
+    } else {
+        ctx.warn(format!(
+            "canceled after scanning {scanned} and repairing {modified} document(s) in this \
+             shard; what is repaired stays repaired and re-running resumes, because a \
+             repaired array no longer looks broken"
+        ));
+    }
+    super::TaskError::Canceled
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn scan_and_repair_shard(
     ctx: &TaskContext,
@@ -234,6 +252,9 @@ async fn scan_and_repair_shard(
         .await
         .map_err(|e| super::TaskError::Failed(e.to_string()))?
     {
+        if ctx.is_canceled() {
+            return Err(canceled(ctx, dry_run, scanned, modified));
+        }
         scanned += 1;
         let seen = progress.scanned.fetch_add(1, Ordering::Relaxed) + 1;
         if seen - progress.last_reported.load(Ordering::Relaxed) >= PROGRESS_EVERY {
@@ -281,23 +302,17 @@ async fn scan_and_repair_shard(
                 .build(),
         ));
         if batch.len() >= batch_size {
-            // Checked at the batch boundary: each repaired document is
-            // independently correct, so stopping here leaves a state that is
-            // easy to describe -- some documents repaired, the rest untouched.
-            if ctx.is_canceled() {
-                ctx.warn(format!(
-                    "canceled after repairing {modified} document(s) in this shard; \
-                     what is repaired stays repaired and re-running resumes, \
-                     because a repaired array no longer looks broken"
-                ));
-                return Err(super::TaskError::Canceled);
-            }
             let n = flush_batch(&client, &mut batch)
                 .await
                 .map_err(|e| super::TaskError::Failed(e.to_string()))?;
             modified += n;
             progress.modified.fetch_add(n, Ordering::Relaxed);
         }
+    }
+    // `run` does not infer cancellation from the flag on a success, so the tail
+    // is not written once it is set.
+    if ctx.is_canceled() {
+        return Err(canceled(ctx, dry_run, scanned, modified));
     }
     if !batch.is_empty() {
         let n = flush_batch(&client, &mut batch)
@@ -595,5 +610,53 @@ mod tests {
             crate::tasks::single_flight_key(TASK_TYPE, &serde_json::json!({ "survey": "lsst" }));
         assert!(ztf.is_some());
         assert_ne!(ztf, lsst, "two surveys must not block each other");
+    }
+
+    #[tokio::test]
+    async fn a_canceled_shard_stops_before_its_next_document_and_writes_nothing() {
+        let db = crate::conf::get_test_db().await;
+        let config = crate::conf::AppConfig::from_test_config().unwrap();
+        let ctx = TaskContext::detached(db.clone(), std::sync::Arc::new(config));
+        ctx.cancel_flag().store(true, Ordering::Relaxed);
+
+        let aux: Collection<Document> = db.collection(&format!(
+            "repair_photometry_cancel_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let mut out_of_order = series(&[2.0, 1.0]);
+        out_of_order.insert("_id", 1_i64);
+        aux.insert_one(out_of_order).await.unwrap();
+
+        let progress = ScanProgress {
+            scanned: AtomicU64::new(0),
+            modified: AtomicU64::new(0),
+            last_reported: AtomicU64::new(0),
+            total: 1,
+        };
+        let mut results = Vec::new();
+        for (dry_run, filter) in [
+            (true, Document::new()),
+            (false, Document::new()),
+            // Matches nothing, so only the check after the scan can stop it.
+            (false, doc! { "_id": -1_i64 }),
+        ] {
+            let result = scan_and_repair_shard(
+                &ctx,
+                aux.clone(),
+                &["fp_hists"],
+                filter,
+                default_batch_size(),
+                dry_run,
+                &progress,
+            )
+            .await;
+            results.push(matches!(result, Err(crate::tasks::TaskError::Canceled)));
+        }
+        let stored = aux.find_one(doc! { "_id": 1_i64 }).await.unwrap().unwrap();
+        aux.drop().await.unwrap();
+
+        assert_eq!(results, [true, true, true]);
+        assert_eq!(progress.scanned.load(Ordering::Relaxed), 0);
+        assert_eq!(broken(&stored), 1, "a canceled run must not repair");
     }
 }
