@@ -222,6 +222,7 @@ pub async fn run(
     // through the one shutdown below, or a writer keeps inserting into a
     // destination the caller has already been told the run failed on.
     let mut read_error: Option<super::TaskError> = None;
+    let mut canceled_resume: Option<i64> = None;
 
     loop {
         // Cancelling in the reader rather than the writers: they drain what is
@@ -231,15 +232,11 @@ pub async fn run(
             // `batch` holds documents read but never sent, so the furthest id
             // read is not a safe resume point -- it would skip them. Same
             // reasoning as the cursor-error path below.
-            let resume = if !batch.is_empty() {
+            canceled_resume = Some(if !batch.is_empty() {
                 batch_start
             } else {
                 max_candid_read
-            };
-            ctx.warn(format!(
-                "canceled after reading {read} document(s); resume with min_candid {resume}"
-            ));
-            read_error = Some(super::TaskError::Canceled);
+            });
             break;
         }
 
@@ -335,12 +332,20 @@ pub async fn run(
     }
     let writer_error = lowest_failure(writer_results);
     // Cancellation is the caller's own decision, so it outranks anything the
-    // shutdown turned up. Otherwise the writers' error is the more specific
-    // one: a send failure only means the reader noticed they had already gone.
-    if matches!(read_error, Some(super::TaskError::Canceled)) {
+    // shutdown turned up, though a failed batch still lowers its resume point.
+    // Otherwise the writers' error is the more specific one: a send failure
+    // only means the reader noticed they had already gone.
+    if let Some(mut resume) = canceled_resume {
+        if let Some((start, e)) = writer_error {
+            ctx.warn(e);
+            resume = resume.min(start);
+        }
+        ctx.warn(format!(
+            "canceled after reading {read} document(s); resume with min_candid {resume}"
+        ));
         return Err(super::TaskError::Canceled);
     }
-    if let Some(e) = writer_error {
+    if let Some((_, e)) = writer_error {
         return Err(failed(e));
     }
     if let Some(e) = read_error {
@@ -412,16 +417,15 @@ async fn connect(uri: &str) -> Result<mongodb::Database, super::TaskError> {
     Ok(client.database(&db_name))
 }
 
-/// The writer failure to report, keyed by the start of the batch it failed on.
+/// The writer failure to report, with the start of the batch it failed on.
 /// Writers take batches in whatever order they reach the channel, so only the
 /// lowest start is a resume point that skips nothing. A panic has no known
 /// batch, so it is keyed `i64::MIN` and wins.
-fn lowest_failure(results: Vec<Result<(), (i64, String)>>) -> Option<String> {
+fn lowest_failure(results: Vec<Result<(), (i64, String)>>) -> Option<(i64, String)> {
     results
         .into_iter()
         .filter_map(Result::err)
         .min_by_key(|(start, _)| *start)
-        .map(|(_, message)| message)
 }
 
 /// insert_many with ordered=false, treating E11000 (duplicate key) as skips.
@@ -520,8 +524,8 @@ mod tests {
     fn the_lowest_failed_batch_is_the_resume_point() {
         let failed = |start: i64| Err((start, format!("resume with min_candid {start}")));
         assert_eq!(
-            lowest_failure(vec![failed(400), Ok(()), failed(100), failed(300)]).as_deref(),
-            Some("resume with min_candid 100")
+            lowest_failure(vec![failed(400), Ok(()), failed(100), failed(300)]),
+            Some((100, "resume with min_candid 100".to_string()))
         );
         assert_eq!(lowest_failure(vec![Ok(()), Ok(())]), None);
     }
