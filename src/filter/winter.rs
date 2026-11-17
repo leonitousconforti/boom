@@ -135,16 +135,16 @@ pub async fn build_winter_alerts(
         .retrieve_multiple_cutouts(&candids, false)
         .await?;
 
-    if candid_to_cutouts.len() != alerts.len() {
-        let mut missing_cutouts_candids: Vec<&i64> = alerts
-            .iter()
-            .filter(|a| !candid_to_cutouts.contains_key(&a.candid))
-            .map(|a| &a.candid)
-            .collect();
+    let mut missing_cutouts_candids: Vec<&i64> = alerts
+        .iter()
+        .filter(|a| !candid_to_cutouts.contains_key(&a.candid))
+        .map(|a| &a.candid)
+        .collect();
+    if !missing_cutouts_candids.is_empty() {
         missing_cutouts_candids.sort();
         warn!(
-            "Only fetched cutouts for {} alerts from {} candids. Missing cutouts for candids: {:?}",
-            candid_to_cutouts.len(),
+            "Missing cutouts for {} of {} fetched alerts: {:?}",
+            missing_cutouts_candids.len(),
             alerts.len(),
             missing_cutouts_candids
         );
