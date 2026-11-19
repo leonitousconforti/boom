@@ -6,9 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { OAuthButtons } from '@/components/oauth-buttons';
 import * as analytics from '@/lib/analytics';
-
-// Use same-origin proxy; prod nginx should route /api to backend
-const API_BASE = '/api/babamul';
+import api from '@/lib/api';
 
 function errorMessage(err: unknown) {
   return err && typeof err === 'object' && 'message' in err ? String((err as { message?: unknown }).message) : String(err);
@@ -30,8 +28,7 @@ export default function SignupPage() {
       if (e && code && !autoActivatedRef.current) {
         autoActivatedRef.current = true;
         setStep('code');
-        // attempt activation automatically
-        activateAccount(e, code);
+        activate(e, code, true);
       }
     } catch {
       // ignore malformed query
@@ -56,26 +53,9 @@ export default function SignupPage() {
     setLoading(true);
     analytics.trackSignupInitiated();
     try {
-      const res = await fetch(`${API_BASE}/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, name }),
-      });
-      if (!res.ok) {
-        const txt = await res.text().catch(() => '');
-        throw new Error(`Sign up failed: ${res.status} ${txt}`);
-      }
-      const body = await res.json().catch(() => ({}));
-      // backend may return { activation_code } for dev; or just a message telling email was sent
-      if (body && (body.activation_code || body.code)) {
-        const code = (body.activation_code ?? body.code) as string;
-        setActivationCode(code);
-        setMessage('Activation code received (development mode). Enter it below to activate your account.');
-        setStep('code');
-      } else {
-        setMessage('An email has been sent with an activation code. Check your inbox.');
-        setStep('code');
-      }
+      await api.signup(email, name);
+      setMessage('An email has been sent with an activation code. Check your inbox.');
+      setStep('code');
       analytics.trackSignupEmailSubmitted();
     } catch (err: unknown) {
       setError(errorMessage(err));
@@ -85,59 +65,18 @@ export default function SignupPage() {
     }
   }
 
-  async function submitCode(e?: React.FormEvent) {
+  function submitCode(e?: React.FormEvent) {
     e?.preventDefault();
-    setError(null);
-    setLoading(true);
     analytics.trackActivationCodeSubmitted();
-    try {
-      const res = await fetch(`${API_BASE}/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, activation_code: activationCode }),
-      });
-      if (!res.ok) {
-        const txt = await res.text().catch(() => '');
-        throw new Error(`Activation failed: ${res.status} ${txt}`);
-      }
-      const body = await res.json().catch(() => ({}));
-      // backend returns the password in the response (per spec)
-      const pw = (body && (body.password ?? body.pw ?? body.pass)) as string | undefined;
-      if (pw) {
-        // show the generated password to the user and allow them to copy/save it
-        setPassword(pw);
-        setMessage('Account activated. Your password is shown below — save it now, it will not be shown again.');
-        setStep('done');
-      } else {
-        setMessage('An account with this email is already activated.');
-        setStep('done');
-      }
-      analytics.trackAccountActivated();
-    } catch (err: unknown) {
-      setError(errorMessage(err));
-      analytics.trackError('account_activation', err);
-    } finally {
-      setLoading(false);
-    }
+    activate(email, activationCode, false);
   }
 
-  // helper to activate using explicit values (used for auto-activation via URL)
-  async function activateAccount(emailToUse: string, codeToUse: string) {
+  async function activate(emailToUse: string, codeToUse: string, viaLink: boolean) {
     setError(null);
-    setMessage(null);
+    if (viaLink) setMessage(null);
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailToUse, activation_code: codeToUse }),
-      });
-      if (!res.ok) {
-        const txt = await res.text().catch(() => '');
-        throw new Error(`Activation failed: ${res.status} ${txt}`);
-      }
-      const body = await res.json().catch(() => ({}));
-      const pw = (body && (body.password ?? body.pw ?? body.pass)) as string | undefined;
+      const pw = await api.activateAccount(emailToUse, codeToUse);
       if (pw) {
         setPassword(pw);
         setMessage('Account activated. Your password is shown below — save it now, it will not be shown again.');
@@ -146,10 +85,10 @@ export default function SignupPage() {
         setMessage('An account with this email is already activated.');
         setStep('done');
       }
-      analytics.trackAccountActivated({ via_link: true });
+      analytics.trackAccountActivated(viaLink ? { via_link: true } : undefined);
     } catch (err: unknown) {
       setError(errorMessage(err));
-      analytics.trackError('auto_account_activation', err);
+      analytics.trackError(viaLink ? 'auto_account_activation' : 'account_activation', err);
     } finally {
       setLoading(false);
     }
