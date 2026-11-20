@@ -35,16 +35,17 @@ export const useAppStore = create<AppState>()(
       },
 
       currentSource: null,
-      setCurrentSource: (v) => set(() => ({ currentSource: v, lastUpdated: Date.now() })),
-      clearCurrentSource: () => set(() => ({ currentSource: null, lastUpdated: Date.now() })),
+      setCurrentSource: (v) => set(() => ({ currentSource: v })),
+      clearCurrentSource: () => set(() => ({ currentSource: null })),
 
       lastUpdated: null,
       touch: () => set(() => ({ lastUpdated: Date.now() })),
     }),
     {
       name: 'boom-app-state', // localStorage key
-      // only persist selected parts
-      partialize: (state) => ({ profile: state.profile, currentSource: state.currentSource, lastUpdated: state.lastUpdated }),
+      // The open object is left out: its page refetches it on every mount, and
+      // its full photometry can outgrow the storage quota.
+      partialize: (state) => ({ profile: state.profile, lastUpdated: state.lastUpdated }),
     }
   )
 )
