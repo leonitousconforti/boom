@@ -231,7 +231,7 @@ const AlertCard = memo(function AlertCard({ alert, survey, scrollRoot, getCache,
         <div><span className="text-muted-foreground">JD:</span> <span className="font-mono">{alert.candidate.jd.toFixed(5)}</span></div>
         {drb !== null && <div><span className="text-muted-foreground">DRB/Reliability:</span> <span className="font-mono">{drb.toFixed(3)}</span></div>}
         {alert.candidate.magpsf !== undefined && <div><span className="text-muted-foreground">Magnitude:</span> <span className="font-mono">{alert.candidate.magpsf.toFixed(2)}</span></div>}
-        {alert.candidate.fid !== undefined && <div><span className="text-muted-foreground">Band:</span> <span className="font-mono">{String(alert.candidate.band)}</span></div>}
+        {alert.candidate.band != null && <div><span className="text-muted-foreground">Band:</span> <span className="font-mono">{String(alert.candidate.band)}</span></div>}
         {host?.dist_mpc != null && <div><span className="text-muted-foreground">Host:</span> <span className="font-mono">{host.name ? `${host.name}, ` : ''}{host.dist_mpc.toFixed(1)} Mpc</span></div>}
       </div>
     </div>
