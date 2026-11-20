@@ -41,7 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   localStorage.clear()
-  useAppStore.setState({ profile: null, lastUpdated: null })
+  useAppStore.setState({ profile: null, currentSource: null, lastUpdated: null })
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -105,5 +105,22 @@ describe("ensureProfileLoaded", () => {
 
     expect(await ensureProfileLoaded()).toEqual(PROFILE)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("the open object", () => {
+  it("is not written to localStorage", () => {
+    useAppStore.getState().setCurrentSource({ objectId: "ZTF18aaaaaaa", prv_candidates: [] })
+
+    expect(localStorage.getItem("boom-app-state")).not.toContain("ZTF18aaaaaaa")
+  })
+
+  it("does not make a stale profile count as fresh", async () => {
+    useAppStore.setState({ lastUpdated: Date.now() - 10 * 60 * 1000 })
+    useAppStore.getState().setCurrentSource({ objectId: "ZTF18aaaaaaa" })
+    const fetchMock = stubFetch({ message: "success", data: PROFILE })
+
+    await ensureProfileLoaded()
+    expect(fetchMock).toHaveBeenCalled()
   })
 })
