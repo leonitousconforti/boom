@@ -38,6 +38,8 @@ BOOM runs on macOS and Linux. You'll need:
 
 **Note:** On Linux, BOOM will fail to start with a clear error if `ORT_DYLIB_PATH` is not set. This is a hard requirement due to ONNX Runtime's dynamic loading behavior. The process will not run without it.
 
+With [Nix](https://nixos.org/download/), `nix develop` (or `direnv allow`) gives you a shell with everything above except Docker, plus the Kafka CLI, `uv`, `bun` and `yq`, and sets `ORT_DYLIB_PATH` to a CPU ONNX Runtime. The steps below are then only needed for Docker and GPU support.
+
 ### Installation steps
 
 #### macOS
