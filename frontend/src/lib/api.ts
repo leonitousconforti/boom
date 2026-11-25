@@ -265,6 +265,28 @@ export async function resetPassword(email: string, token: string, new_password: 
   await ensureOk(res, "Password reset");
 }
 
+export async function signup(email: string, name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, name }),
+  });
+  await ensureOk(res, "Sign up");
+}
+
+/** The generated password, which only the activation that sets it returns. */
+export async function activateAccount(email: string, activation_code: string): Promise<string | undefined> {
+  const res = await fetch(`${API_BASE}/activate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, activation_code }),
+  });
+  await ensureOk(res, "Activation");
+  const body = await readJson(res);
+  const password = body && typeof body === "object" && "password" in body ? body.password : undefined;
+  return typeof password === "string" ? password : undefined;
+}
+
 const authorization = (token: TokenRecord) => `${token.token_type} ${token.access_token}`;
 
 // Exported for the admin client, which shares this request path rather than
@@ -734,6 +756,8 @@ export default {
   verifyOAuthEmail,
   forgotPassword,
   resetPassword,
+  signup,
+  activateAccount,
   fetchObject,
   fetchProfile,
   updateProfileName,
