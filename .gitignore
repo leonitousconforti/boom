@@ -70,3 +70,8 @@ config.docker.yaml
 # image and a developer's checkout resolve to the same versions.
 .venv/
 .pytest_cache/
+
+# Nix and direnv
+.direnv
+result
+result-*
