@@ -6,7 +6,10 @@ use boom::{
     },
     conf::{get_test_cutout_storage, get_test_db},
     enrichment::{EnrichmentWorker, EnrichmentWorkerError, ZtfEnrichmentWorker},
-    filter::{alert_to_avro_bytes, load_alert_schema, FilterWorker, Origin, ZtfFilterWorker},
+    filter::{
+        alert_to_avro_bytes, build_ztf_alerts, load_alert_schema, ztf_results_pipeline,
+        FilterWorker, Origin, ZtfFilterWorker,
+    },
     utils::{
         enums::Survey,
         lightcurves::{flux2mag, ZTF_ZP},
@@ -17,6 +20,7 @@ use boom::{
     },
 };
 use mongodb::bson::{doc, Document};
+use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_process_ztf_alert() {
@@ -562,6 +566,39 @@ async fn test_filter_ztf_alert_skips_non_finite_photometry() {
     let photometry = &alerts_output[0].photometry;
     assert_eq!(photometry.len(), 20);
     assert!(photometry.iter().all(|p| p.flux_err.is_finite()));
+}
+
+#[tokio::test]
+async fn test_build_ztf_alerts_skips_an_alert_that_was_not_fetched() {
+    let mut alert_worker = ztf_alert_worker().await;
+    let (kept, _, _, _, bytes_content) = AlertRandomizer::new_randomized(Survey::Ztf).get().await;
+    alert_worker.process_alert(&bytes_content).await.unwrap();
+    let (unfetched, unfetched_object_id, _, _, bytes_content) =
+        AlertRandomizer::new_randomized(Survey::Ztf).get().await;
+    alert_worker.process_alert(&bytes_content).await.unwrap();
+
+    // Its cutouts and aux stay, as when the fetch skips an alert that is stored.
+    let db = get_test_db().await;
+    let alerts = db.collection::<Document>("ZTF_alerts");
+    alerts.delete_one(doc! {"_id": unfetched}).await.unwrap();
+
+    let cutout_storage = get_test_cutout_storage(&Survey::Ztf).await;
+    let results = HashMap::from([(kept, Vec::new()), (unfetched, Vec::new())]);
+    let result =
+        build_ztf_alerts(&results, &ztf_results_pipeline(), &alerts, &cutout_storage).await;
+
+    drop_alert_from_collections(kept, &Survey::Ztf)
+        .await
+        .unwrap();
+    cutout_storage.delete_cutouts(unfetched).await.unwrap();
+    db.collection::<Document>("ZTF_alerts_aux")
+        .delete_one(doc! {"_id": &unfetched_object_id})
+        .await
+        .unwrap();
+
+    let built = result.unwrap();
+    assert_eq!(built.len(), 1);
+    assert_eq!(built[0].candid, kept);
 }
 
 #[tokio::test]
