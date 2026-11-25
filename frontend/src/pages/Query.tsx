@@ -19,6 +19,8 @@ export default function Query() {
 
   // Alert search state
   const [alertSurvey, setAlertSurvey] = useState<'ZTF' | 'LSST'>('ZTF');
+  // The survey the shown results came from; the toggle can change before the next search.
+  const [resultsSurvey, setResultsSurvey] = useState<'ZTF' | 'LSST'>('ZTF');
   const [alertSearchTab, setAlertSearchTab] = useState<'filters' | 'object' | 'position'>('filters');
 
   function handleAlertSearchTabChange(tab: 'filters' | 'object' | 'position') {
@@ -71,6 +73,7 @@ export default function Query() {
     setLoading(true);
     setError(null);
     setAlerts([]);
+    setResultsSurvey(survey);
     requestAnimationFrame(() => {
       searchResultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -255,7 +258,7 @@ export default function Query() {
           loading={loading}
           error={error}
           alerts={alerts}
-          survey={alertSurvey}
+          survey={resultsSurvey}
           currentPage={currentPage}
           pageSize={PAGE_SIZE}
           onPrev={() => goToPage(currentPage - 1)}
